@@ -152,6 +152,7 @@ window.__ModuleLoader__.load({
          .dshwm-pin:hover{background:var(--dsw-alias-interactive-bg-hover)}
          .dshwm-pin:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary,Highlight);outline-offset:-2px}
          .dshwm-pin[data-enabled=true]{color:var(--dsw-alias-state-business-primary,LinkText)}
+         .bw-row-actions>.dshwm-pin{width:16px;height:16px;margin:0}
          .dshwm-tip,.dshwm-dialog{background:var(--dsw-alias-bg-layer-3,Canvas);color:var(--dsw-alias-label-primary,CanvasText);border:1px solid var(--dsw-alias-border-l2,GrayText);border-radius:var(--dsw-radius-lg,12px)}
          .dshwm-native-model{font-size:13px;line-height:20px;font-weight:400;color:var(--dsw-alias-hovercard-label-primary,var(--dsw-alias-label-primary));overflow-wrap:anywhere}
          .dshwm-tip{position:fixed;z-index:1200;padding:5px 9px;max-width:min(400px,90vw);pointer-events:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;line-height:20px;font-weight:400;box-shadow:0 3px 14px #0002}
@@ -202,23 +203,46 @@ window.__ModuleLoader__.load({
           else if (label.textContent !== text) label.textContent = text
         }
       }
+      // Better Workspace renders its own row/card but passes the registered
+      // workspace ID to native new-session creation. Adapt only its UI.
+      function syncBetterCards(anchors, paths) {
+        for (const content of document.querySelectorAll('[style*="--dsh-hover-preview-fade"] > .bw-hover-card')) {
+          const anchor = content.parentElement.style.getPropertyValue('position-anchor').trim()
+          const path = content.querySelector(':scope > .bw-hover-path')?.textContent
+          const ws = anchor ? anchors.get(anchor) : path ? paths.get(path) : undefined
+          const label = content.querySelector(':scope > .dshwm-native-model')
+          const rule = ws && !tip ? find(ws.workspaceId) : undefined
+          if (!content.querySelector(':scope > .bw-hover-title') || !rule?.enabled || !rule.provider || !rule.model) {
+            label?.remove()
+            continue
+          }
+          const text = line(rule, '固定模型')
+          if (!label) content.append(element('div', text, {className:'dshwm-native-model'}))
+          else if (label.textContent !== text) label.textContent = text
+        }
+      }
       const sync = () => {
         if (disposed) return
         const anchors = new Map(), paths = new Map()
+        const betterAnchors = new Map(), betterPaths = new Map()
         const list = new Map((workspaces.getSnapshot().items ?? []).map(ws=>[String(ws.workspaceId),ws]))
         for (const [row, data] of controls) {
           if (!row.isConnected || !data.button.isConnected) {data.button.remove();controls.delete(row)}
         }
-        for (const row of document.querySelectorAll('[role="treeitem"][data-row-key^="workspace:"]')) {
-          const ws = list.get(row.getAttribute('data-row-key').slice('workspace:'.length))
+        for (const row of document.querySelectorAll('[role="treeitem"][data-row-key^="workspace:"], .bw-container-row[role="treeitem"][data-row-key^="ws-"]')) {
+          const key = row.getAttribute('data-row-key')
+          const better = key.startsWith('ws-')
+          const ws = list.get(key.slice(better ? 'ws-'.length : 'workspace:'.length))
           if (!ws) continue
+          const rowAnchors = better ? betterAnchors : anchors
+          const rowPaths = better ? betterPaths : paths
           const anchor = row.parentElement?.style.getPropertyValue('anchor-name').trim()
-          if (anchor?.startsWith('--dsh-hover-card-')) anchors.set(anchor, ws)
-          if (ws.path) paths.set(ws.path, paths.has(ws.path) ? null : ws)
-          const action = row.lastElementChild
+          if (anchor?.startsWith('--dsh-hover-card-')) rowAnchors.set(anchor, ws)
+          if (ws.path) rowPaths.set(ws.path, rowPaths.has(ws.path) ? null : ws)
+          const action = better ? row.querySelector(':scope > .bw-row-actions') : row.lastElementChild
           if (!(action instanceof HTMLElement) || !action.querySelector('button')) continue
           let item = controls.get(row)
-          if (!item || item.wsId !== ws.workspaceId) {
+          if (!item || item.wsId !== ws.workspaceId || item.button.parentElement !== action) {
             item?.button.remove()
             const button = element('button','',{type:'button',className:'dshwm-pin'})
             button.setAttribute('aria-describedby','dshwm-tip')
@@ -238,6 +262,7 @@ window.__ModuleLoader__.load({
           }
         }
         syncNativeCards(anchors, paths)
+        syncBetterCards(betterAnchors, betterPaths)
       }
       ctx.effect(()=>{
         document.head.append(style)
