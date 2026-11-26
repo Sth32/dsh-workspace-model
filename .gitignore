@@ -1,0 +1,8 @@
+node_modules/
+*.tgz
+*.log
+/visual-v2/
+/diagonal-visual/
+/native-card-visual/
+/screenshots/
+/0[1-9]-*.png

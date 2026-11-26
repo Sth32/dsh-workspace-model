@@ -1,0 +1,13 @@
+{
+  "id": "dsh-external/dsh-workspace-model",
+  "version": "0.1.0",
+  "description": "DSH workspace-specific defaults for model and reasoning",
+  "main": "./index.js",
+  "engines": {
+    "dsh": ">=0.2.2-rc.5 <0.3.0-0"
+  },
+  "contributes": {
+    "tools": [],
+    "skills": []
+  }
+}
