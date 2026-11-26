@@ -14,3 +14,35 @@ jobs:
           node-version: '24'
       - run: npm test
       - run: npm pack --dry-run
+  browser:
+    name: Browser regression (DSH ${{ matrix.dsh }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - dsh: '0.2.2-rc.5'
+            preset: standard
+          - dsh: '0.2.3-alpha.2'
+            preset: ptc
+    env:
+      PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/playwright-browsers
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.22.3'
+      - name: Install pinned DSH and test browser
+        env:
+          DSH_VERSION: ${{ matrix.dsh }}
+        run: |
+          npm install --prefix "$RUNNER_TEMP/dsh-fixture" --no-save "@deepseek-ai/dsh@$DSH_VERSION" playwright@1.62.1 pnpm@11.25.0
+          "$RUNNER_TEMP/dsh-fixture/node_modules/.bin/playwright" install --with-deps chromium
+      - name: Exercise workspace model routing through DSH Web
+        env:
+          DSH_TEST_AGENT_PRESET: ${{ matrix.preset }}
+        run: |
+          export NODE_PATH="$RUNNER_TEMP/dsh-fixture/node_modules"
+          export PATH="$NODE_PATH/.bin:$PATH"
+          export DSH_TEST_CLI="$NODE_PATH/@deepseek-ai/dsh/lib/bin.js"
+          bash e2e/run.sh

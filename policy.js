@@ -12,7 +12,7 @@ export function sameModel(a, b) {
  * Extend native creation only after authorization/creation have succeeded.
  * Never change the caller's contract or replace the global default writer.
  */
-export function withWorkspaceDefault(create, {rules, legacySharing = () => false, workspaces = () => [], getAgent, globalModel, resolve, warn, isBlank, hasSelection}) {
+export function withWorkspaceDefault(create, {rules, legacySharing = () => false, workspaces = () => [], getAgent, globalModel, resolve, warn, isBlank, observeSelection, loadOrigin = async () => undefined, saveOrigin = async () => {}}) {
   const managed = new WeakMap()
   return async function (request, ...args) {
     // Snapshot when the request is accepted; a later save affects the next request.
@@ -33,25 +33,38 @@ export function withWorkspaceDefault(create, {rules, legacySharing = () => false
     try {
       const agent = getAgent(result.sessionId)
       if (!agent) return result
-      const prior = managed.get(agent)
-      const previous = prior?.workspaceId === requested ? prior.selection : undefined
-      if (!rule?.enabled && !previous) return result
+      if (!isBlank(agent)) return result
       const requestedBlank = request.sessionId === result.sessionId
+      const origin = requestedBlank ? managed.get(agent) ?? await loadOrigin(result.sessionId) : undefined
+      if (!rule?.enabled && !origin) return result
+      const observed = requestedBlank ? await observeSelection(agent) : undefined
       const current = agent.model.current()
-      // Native only reuses blank sessions. Still preserve an explicit model edit on a blank
-      // and never touch a retained agent whose choice we did not set.
-      if (requestedBlank && (previous ? !sameModel(previous, current) : await hasSelection(agent))) return result
+      const ours = origin?.workspaceId === requested && observed?.seq != null &&
+        origin.seq === observed.seq && sameModel(origin.selection, current)
+      // A legacy/unmarked, newly hand-picked, or moved selection is not ours.
+      if (observed?.hasRequest || (observed?.seq != null && !ours) || (!rule?.enabled && !ours)) return result
       const selection = rule?.enabled ? modelOf(rule) : globalModel()
       if (!selection || !await resolve(selection)) {
         warn('Workspace default is unavailable; retaining the native model selection')
         return result
       }
-      // Preserve selections made while catalog validation was in flight.
+      // Native choices can change during catalog/observation I/O. Do not use an
+      // old snapshot even if a user switched away and then back to the same tuple.
+      if (observed) {
+        const latest = await observeSelection(agent)
+        if (latest.seq !== observed.seq || latest.hasRequest) return result
+      }
       const now = agent.model.current()
       if (now !== current && (now || current) && !sameModel(now, current)) return result
       if (!isBlank(agent)) return result
+      const seq = agent.session.seq
       agent.model.select(selection)
-      managed.set(agent, { workspaceId: requested, selection })
+      // AgentModel.select is synchronous and does not append a duplicate.
+      if (agent.session.seq === seq + 1) {
+        const provenance = { workspaceId: requested, seq, selection }
+        managed.set(agent, provenance)
+        await saveOrigin(result.sessionId, provenance)
+      }
     } catch (error) {
       warn('Workspace default was not applied: ' + String(error))
     }
