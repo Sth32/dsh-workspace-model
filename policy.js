@@ -21,7 +21,7 @@ export function withWorkspaceDefault(create, {rules, legacySharing = () => false
     if (requested != null) {
       try {
         const choices = rules(), legacy = legacySharing()
-        const sharing = legacy || choices.some(choice => choice.shareWithChildren)
+        const sharing = legacy || choices.some(choice => choice.shareWithChildren || (choice.childProvider && choice.childModel))
         rule = effectiveRule(requested, sharing ? workspaces() : [], choices, legacy).rule
       } catch (error) {
         warn('Workspace default lookup failed: ' + String(error))

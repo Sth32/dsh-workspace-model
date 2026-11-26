@@ -23,15 +23,21 @@ window.__ModuleLoader__.load({
       for (const workspace of items) {
         const root = pathKey(workspace.path)
         const candidate = byId.get(idOf(workspace))
-        if (!candidate || candidate.inherit || root == null || root.length <= length
+        if (!candidate || (candidate.inherit && !(candidate.childProvider && candidate.childModel)) || root == null || root.length <= length
           || child === root || !child.startsWith(root + '/')) continue
         source = workspace
         rule = candidate
         length = root.length
       }
+      if (!source) return {}
+      const share = !rule.inherit && (rule.shareWithChildren ?? legacySharing)
+      if (share && rule.enabled) return { rule, source }
+      if (rule.childProvider && rule.childModel) {
+        return { rule: { enabled: true, provider: rule.childProvider, model: rule.childModel,
+          reasoningEffort: rule.childReasoningEffort }, source, sourceKind: 'assigned' }
+      }
       // An explicit nearer rule stops the search, even if it is not shared.
-      // Legacy global opt-in is only a default for rules saved before v0.1.3.
-      return source && (rule.shareWithChildren ?? legacySharing) ? { rule, source } : {}
+      return share ? { rule, source } : {}
     }
     // END SHARED INHERITANCE
     exports.inject = ['configForms', 'remote', 'remote.session', 'workspaces', 'contextMenus']
@@ -58,11 +64,11 @@ window.__ModuleLoader__.load({
       const line = (rule, type) => type + '：' + modelText(rule)
       const effective = (ws, choices = rules()) =>
         effectiveRule(ws.workspaceId, workspaces.getSnapshot().items ?? [], choices, legacySharing())
-      const inheritedLine = ({rule,source}) => source && rule?.enabled && rule.provider && rule.model
-        ? '继承自「' + name(source) + '」：' + modelText(rule) : ''
+      const inheritedLine = ({rule,source,sourceKind}) => source && rule?.enabled && rule.provider && rule.model
+        ? (sourceKind === 'assigned' ? '由「' + name(source) + '」指定' : '继承自「' + name(source) + '」') + '：' + modelText(rule) : ''
       const cardLine = ws => {
-        const {rule,source} = effective(ws)
-        return source ? inheritedLine({rule,source}) : rule?.enabled && rule.provider && rule.model ? line(rule,'固定模型') : ''
+        const {rule,source,sourceKind} = effective(ws)
+        return source ? inheritedLine({rule,source,sourceKind}) : rule?.enabled && rule.provider && rule.model ? line(rule,'固定模型') : ''
       }
       // One low-detail outline at 14 px, matching the native new-session glyph.
       function cloudIcon(pinned) {
@@ -122,21 +128,43 @@ window.__ModuleLoader__.load({
         const stored = find(ws.workspaceId)
         const draft = {workspaceId:ws.workspaceId, enabled:stored?.enabled ?? false, inherit: !stored || stored.inherit === true,
           shareWithChildren: stored?.shareWithChildren ?? (!!stored && !stored.inherit && legacySharing()),
+          childProvider:stored?.childProvider ?? '', childModel:stored?.childModel ?? '', childReasoningEffort:stored?.childReasoningEffort ?? '',
           provider:stored?.provider ?? '', model:stored?.model ?? '', reasoningEffort:stored?.reasoningEffort ?? ''}
         const d = dialog = element('dialog', '', {className:'dshwm-dialog'})
         d.setAttribute('aria-labelledby','dshwm-title')
         d.append(element('h2', '工作区默认模型', {id:'dshwm-title'}),
           element('p', name(ws), {className:'dshwm-workspace'}),element('small',ws.path || ''),
-          element('p','只影响在此工作区新建的会话，不改已有对话和全局默认。',{className:'dshwm-desc'}))
+          element('p','只影响新建会话，不改已有对话和全局默认。',{className:'dshwm-desc'}))
         const mode = element('select','')
         mode.append(opt('inherit','继承父工作区'),opt('global','跟随全局'),opt('custom','使用专属模型'))
         mode.value = draft.inherit ? 'inherit' : draft.enabled ? 'custom' : 'global'
         const inheritance = element('input','',{type:'checkbox',className:'dshwm-inherit-toggle'})
         const switchRow = element('label','',{className:'dshwm-inherit-setting'})
         switchRow.append(inheritance, element('span','子工作区继承当前配置'))
-        const provider = element('select',''), model = element('select',''), effort = element('select','')
+        function modelFields(container, prefix, keys, noneCaption) {
+          const [pKey,mKey,eKey] = keys
+          const provider = element('select',''), model = element('select',''), effort = element('select','')
+          container.append(label(prefix+'提供方',provider),label(prefix+'模型',model),label(prefix+'思考等级',effort))
+          provider.onchange = ()=>{draft[pKey]=provider.value;draft[mKey]='';draft[eKey]='';draw()}
+          model.onchange = ()=>{draft[mKey]=model.value;draft[eKey]='';draw()}
+          effort.onchange = ()=>{draft[eKey]=effort.value;draw()}
+          return (groups) => {
+            const g = groups.find(g=>g.id===draft[pKey]), m = g?.models.find(m=>m.id===draft[mKey])
+            fill(provider,groups,draft[pKey],noneCaption)
+            fill(model,g?.models ?? [],draft[mKey],'请选择模型')
+            fill(effort,m?.reasoning?.efforts ?? [],draft[eKey],'模型默认')
+            provider.disabled = !groups.length
+            model.disabled = !g
+            effort.disabled = !m?.reasoning?.efforts?.length
+            return !m || (draft[eKey] && !m.reasoning?.efforts?.some(e=>e.id===draft[eKey]))
+          }
+        }
         const fields = element('div','')
-        fields.append(label('提供方',provider),label('模型',model),label('思考等级',effort))
+        const childFields = element('fieldset','',{className:'dshwm-child-settings'})
+        childFields.append(element('legend','子工作区默认模型'),
+          element('p','仅作用于未单独设置的子工作区。选择「不指定」可清除这组设置。',{className:'dshwm-desc'}))
+        const drawOwn = modelFields(fields,'',['provider','model','reasoningEffort'],'请选择提供方')
+        const drawChild = modelFields(childFields,'子工作区',['childProvider','childModel','childReasoningEffort'],'不指定')
         const details = element('p','',{className:'dshwm-desc',ariaLive:'polite'})
         const notice = element('p','',{className:'dshwm-notice',ariaLive:'polite'})
         const actions = element('div','',{className:'dshwm-actions'})
@@ -144,7 +172,7 @@ window.__ModuleLoader__.load({
         const save = element('button','保存',{type:'button',className:'dshwm-primary'})
         cancel.onclick = () => d.close()
         actions.append(cancel,save)
-        d.append(label('默认规则',mode),details,fields,switchRow,notice,actions)
+        d.append(label('默认规则',mode),details,fields,switchRow,childFields,notice,actions)
         function fill(input, values, selected, caption) {
           input.replaceChildren(opt('',caption), ...values.map(x=>opt(x.id,x.name || x.id)))
           if (selected && !values.some(x=>x.id===selected)) input.append(opt(selected, selected+'（不可用）'))
@@ -153,14 +181,10 @@ window.__ModuleLoader__.load({
         let saving = false
         function draw() {
           const groups = catalog?.groups ?? []
-          const g = groups.find(g=>g.id===draft.provider), m = g?.models.find(m=>m.id===draft.model)
-          fill(provider,groups,draft.provider,'请选择提供方')
-          fill(model,g?.models ?? [],draft.model,'请选择模型')
-          fill(effort,m?.reasoning?.efforts ?? [],draft.reasoningEffort,'模型默认')
+          const ownBlocked = drawOwn(groups)
+          const childBlocked = drawChild(groups)
           fields.hidden = !draft.enabled
-          provider.disabled = !groups.length
-          model.disabled = !g
-          effort.disabled = !m?.reasoning?.efforts?.length
+          childFields.hidden = draft.enabled && draft.shareWithChildren
           const inherited = draft.inherit ? effective(ws, [...rules().filter(x=>x.workspaceId!==ws.workspaceId),draft]) : {}
           const inheritedDetails = inheritedLine(inherited) ||
             (inherited.source ? '继承自「' + name(inherited.source) + '」：跟随全局。' :
@@ -168,19 +192,16 @@ window.__ModuleLoader__.load({
           details.textContent = draft.enabled ? '手动选择的模型仍可覆盖默认值。' :
             (draft.inherit ? inheritedDetails + ' ' : '') + line(global(),'全局默认') + (draft.model ? '。上次专属配置已保留。' : '')
           if (draft.inherit && inherited.rule?.enabled) details.textContent = inheritedDetails + (draft.model ? '。上次专属配置已保留。' : '')
-          const blocked = draft.enabled && (!m || (draft.reasoningEffort && !m.reasoning?.efforts?.some(e=>e.id===draft.reasoningEffort)))
+          const blocked = (draft.enabled && ownBlocked) || (!childFields.hidden && draft.childProvider && childBlocked)
           const writable = form.getSnapshot().writable
           switchRow.hidden = !draft.enabled
           inheritance.checked = draft.shareWithChildren
           inheritance.disabled = !writable || saving
           save.disabled = saving || !writable || !!blocked
-          notice.textContent = !writable ? '当前配置不可写，请确认你已连接本机 DSH。' : (draft.enabled ? catalogError || '' : '')
+          notice.textContent = !writable ? '当前配置不可写，请确认你已连接本机 DSH。' : (draft.enabled || !childFields.hidden ? catalogError || '' : '')
         }
         mode.onchange = ()=>{draft.enabled=mode.value==='custom';draft.inherit=mode.value==='inherit';draw()}
-        inheritance.onchange = ()=>{draft.shareWithChildren=inheritance.checked}
-        provider.onchange = ()=>{draft.provider=provider.value;draft.model='';draft.reasoningEffort='';draw()}
-        model.onchange = ()=>{draft.model=model.value;draft.reasoningEffort='';draw()}
-        effort.onchange = ()=>{draft.reasoningEffort=effort.value;draw()}
+        inheritance.onchange = ()=>{draft.shareWithChildren=inheritance.checked;draw()}
         save.onclick = async ()=>{
           if (saving) return
           saving = true; draw()
@@ -218,7 +239,10 @@ window.__ModuleLoader__.load({
          .dshwm-dialog small{overflow-wrap:anywhere}
          .dshwm-field{display:grid;grid-template-columns:78px 1fr;align-items:center;gap:12px;margin:8px 0}
          .dshwm-inherit-setting{display:flex;align-items:center;gap:8px;margin:12px 0;font-size:12px;line-height:18px}
-         .dshwm-inherit-setting[hidden]{display:none}
+         .dshwm-inherit-setting[hidden],.dshwm-child-settings[hidden]{display:none}
+         .dshwm-child-settings{min-width:0;margin:12px 0 0;border:1px solid var(--dsw-alias-border-l2,GrayText);border-radius:var(--dsw-radius-sm,6px);padding:0 12px 4px}
+         .dshwm-child-settings legend{padding:0 4px;font-weight:600}
+         .dshwm-child-settings .dshwm-field{grid-template-columns:105px 1fr}
          .dshwm-inherit-toggle{margin:0;accent-color:var(--dsw-alias-state-business-primary,Highlight)}
          .dshwm-field select{width:100%;min-width:0;height:32px;box-sizing:border-box;background:var(--dsw-alias-bg-module-platform,Field);color:var(--dsw-alias-label-primary,FieldText);border:1px solid var(--dsw-alias-border-l2,GrayText);border-radius:var(--dsw-radius-sm,6px);padding:4px 8px;font:inherit}
          .dshwm-field select:focus-visible,.dshwm-actions button:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary,Highlight);outline-offset:1px}

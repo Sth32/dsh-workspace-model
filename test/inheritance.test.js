@@ -49,3 +49,19 @@ test('upgrades preserve legacy rules, but explicit scoped off wins',()=>{
  assert.deepEqual(effectiveRule('child',list,[{...legacy,shareWithChildren:false}],true),{})
  assert.deepEqual(effectiveRule('child',list,[legacy],false),{})
 })
+
+test('separately assigned model has its own source and never changes the parent',()=>{
+ const list=[root,child,leaf]
+ const r={...custom('root'),shareWithChildren:false,childProvider:'p',childModel:'other',childReasoningEffort:'low'}
+ const assigned={rule:{enabled:true,provider:'p',model:'other',reasoningEffort:'low'},source:root,sourceKind:'assigned'}
+ assert.deepEqual(effectiveRule('root',list,[r]),{rule:r})
+ assert.deepEqual(effectiveRule('leaf',list,[r]),assigned)
+ assert.deepEqual(effectiveRule('leaf',list,[r,{...custom('child'),inherit:true}]),assigned)
+ assert.deepEqual(effectiveRule('child',list,[r,custom('child')]),{rule:custom('child')})
+ assert.deepEqual(effectiveRule('leaf',list,[r,custom('child')]),{})
+ const same={...r,shareWithChildren:true}
+ assert.deepEqual(effectiveRule('leaf',list,[same]),{rule:same,source:root})
+ assert.deepEqual(effectiveRule('leaf',list,[{...r,inherit:true}]),assigned)
+ assert.deepEqual(effectiveRule('leaf',list,[{...r,enabled:false}]),assigned)
+ assert.deepEqual(effectiveRule('leaf',list,[{...r,childProvider:'',childModel:''}]),{})
+})

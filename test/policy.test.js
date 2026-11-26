@@ -66,3 +66,13 @@ test('inherited choice resets a blank when the global switch is off, preserving 
  await f.create({workspaceId:'child',sessionId:r.sessionId})
  assert.equal(f.map.get(r.sessionId).model.current().model,'manual')
 })
+
+test('separate child assignment is used even when no branch shares the parent model', async () => {
+ const f=fixture()
+ f.state.workspaces=[{id:'a',path:'/A'}, {id:'child',path:'/A/Child'}, {id:'other',path:'/Other'}]
+ f.state.rules=[{...a,shareWithChildren:false,childProvider:'d',childModel:'child-model',childReasoningEffort:'low'}]
+ for(const [workspaceId,selection] of [['a',{provider:'d',model:'A',reasoningEffort:'high'}],['child',{provider:'d',model:'child-model',reasoningEffort:'low'}],['other',global]]){
+  const r=await f.create({workspaceId})
+  assert.deepEqual(f.map.get(r.sessionId).model.current(),selection)
+ }
+})

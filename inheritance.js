@@ -17,13 +17,19 @@ export function effectiveRule(id, items, rules, legacySharing = false) {
   for (const workspace of items) {
     const root = pathKey(workspace.path)
     const candidate = byId.get(idOf(workspace))
-    if (!candidate || candidate.inherit || root == null || root.length <= length
+    if (!candidate || (candidate.inherit && !(candidate.childProvider && candidate.childModel)) || root == null || root.length <= length
       || child === root || !child.startsWith(root + '/')) continue
     source = workspace
     rule = candidate
     length = root.length
   }
+  if (!source) return {}
+  const share = !rule.inherit && (rule.shareWithChildren ?? legacySharing)
+  if (share && rule.enabled) return { rule, source }
+  if (rule.childProvider && rule.childModel) {
+    return { rule: { enabled: true, provider: rule.childProvider, model: rule.childModel,
+      reasoningEffort: rule.childReasoningEffort }, source, sourceKind: 'assigned' }
+  }
   // An explicit nearer rule stops the search, even if it is not shared.
-  // Legacy global opt-in is only a default for rules saved before v0.1.3.
-  return source && (rule.shareWithChildren ?? legacySharing) ? { rule, source } : {}
+  return share ? { rule, source } : {}
 }
