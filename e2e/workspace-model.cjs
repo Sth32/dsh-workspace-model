@@ -81,6 +81,20 @@ async function main() {
     await page.getByRole('menuitem',{name:/^模型 /}).click()
     await page.getByRole('menuitemradio',{name:/^General(?: |$)/}).click()
   }
+  async function chooseManualCodingHigh() {
+    await modelButton().click()
+    await page.getByRole('menuitem',{name:/^模型 /}).click()
+    await page.getByRole('menuitemradio',{name:/^Coding(?: |$)/}).click()
+    await modelButton().click()
+    await page.getByRole('menuitem',{name:/^推理等级(?: |$)/}).click()
+    await page.getByRole('menuitemradio',{name:/^High(?: |$)/}).click()
+  }
+  async function assertGlobalTip(n, label) {
+    await title(n).hover()
+    await page.getByRole('button',{name:'设置 '+n+' 的默认模型',exact:true}).hover()
+    await page.getByRole('tooltip').filter({hasText:'跟随全局：'+label}).waitFor()
+    await page.locator('[contenteditable=true]').last().hover()
+  }
   async function switchWorkspace(n) {
     await page.getByRole('button',{name:'选择工作区',exact:true}).click()
     await page.getByRole('menuitem',{name:n,exact:true}).click()
@@ -123,6 +137,15 @@ async function main() {
       await newAndSend(P,parent,'sidebar-parent')
       await newAndSend(L,child,'assigned-grandchild')
       await newAndSend(O,general,'unrelated')
+      await assertGlobalTip(O,'General')
+      await openNew(P);await assertDraft(P,parent)
+      await chooseManualCodingHigh();await send(P,local,'manual-in-fixed')
+      // No page reload or settings-dialog open: a stale catalog would still say General.
+      await assertGlobalTip(O,'Coding High')
+      await newAndSend(O,local,'unrelated-after-manual')
+      await openNew(P);await assertDraft(P,parent)
+      await chooseManualGeneral();await send(P,general,'restore-native-global')
+      await assertGlobalTip(O,'General')
       await open(P);await checked.check();await save()
       await hover(C,'继承自「MatrixRoot」：Parent Medium')
       await newAndSend(C,parent,'inherited')

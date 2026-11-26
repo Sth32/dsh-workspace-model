@@ -46,7 +46,7 @@ window.__ModuleLoader__.load({
       const workspaces = ctx.get('workspaces').list
       const remote = ctx.get('remote')
       const controls = new Map()
-      let catalog, catalogError, disposed = false, refreshing = false, dialog, tip
+      let catalog, catalogError, disposed = false, catalogRequest, dialog, tip
       const rules = () => form.getSnapshot().value?.rules ?? []
       const legacySharing = () => form.getSnapshot().value?.inheritEnabled === true
       const find = id => rules().find(x => x.workspaceId === id)
@@ -99,22 +99,34 @@ window.__ModuleLoader__.load({
         const rowRight = button.closest('[role="treeitem"]')?.getBoundingClientRect().right ?? r.right
         tip = element('div', '', {id:'dshwm-tip', className:'dshwm-tip'})
         tip.setAttribute('role', 'tooltip')
-        tip.textContent = cardLine(ws) || line(global(), '跟随全局')
+        const fixed = cardLine(ws)
+        tip.textContent = fixed || '跟随全局'
         document.body.append(tip)
-        const w = tip.getBoundingClientRect().width
-        tip.style.left = Math.max(6, Math.min(rowRight + 8, innerWidth - w - 8)) + 'px'
-        tip.style.top = Math.max(8, Math.min(r.top + (r.height - tip.offsetHeight) / 2, innerHeight - tip.offsetHeight - 8)) + 'px'
+        const target = tip
+        const place = () => {
+          const w = target.getBoundingClientRect().width
+          target.style.left = Math.max(6, Math.min(rowRight + 8, innerWidth - w - 8)) + 'px'
+          target.style.top = Math.max(8, Math.min(r.top + (r.height - target.offsetHeight) / 2, innerHeight - target.offsetHeight - 8)) + 'px'
+        }
+        place()
+        if (!fixed) void refreshCatalog().then(() => {
+          if (tip !== target || disposed) return
+          target.textContent = cardLine(ws) || (catalogError || !global() ? '跟随全局' : line(global(), '跟随全局'))
+          place()
+        })
       }
-      async function refreshCatalog() {
-        if (refreshing) return
-        refreshing = true
-        try {
-          const r = await remote.session.modelCatalog()
-          if (!r?.ok || !r.value?.groups) throw new Error('模型目录暂不可用')
-          catalog = r.value
-          catalogError = ''
-        } catch { catalogError = '模型目录暂不可用。关闭后重试，或先在原生「模型」设置中检查提供方。' }
-        finally { refreshing = false; if (!disposed) sync() }
+      function refreshCatalog() {
+        if (catalogRequest) return catalogRequest
+        catalogRequest = Promise.resolve().then(async () => {
+          try {
+            const r = await remote.session.modelCatalog()
+            if (!r?.ok || !r.value?.groups) throw new Error('模型目录暂不可用')
+            catalog = r.value
+            catalogError = ''
+          } catch { catalogError = '模型目录暂不可用。关闭后重试，或先在原生「模型」设置中检查提供方。' }
+          finally { catalogRequest = undefined; if (!disposed) sync() }
+        })
+        return catalogRequest
       }
       function label(title, control) {
         const out = element('label', '', {className:'dshwm-field'})
@@ -189,7 +201,7 @@ window.__ModuleLoader__.load({
           const inheritedDetails = inheritedLine(inherited) ||
             (inherited.source ? '继承自「' + name(inherited.source) + '」：跟随全局。' :
               '上级未共享专属模型。')
-          details.textContent = draft.enabled ? '手动选择的模型仍可覆盖默认值。' :
+          details.textContent = draft.enabled ? '输入框里手动换模型会更新 DSH 全局默认，不会改这里的专属配置。' :
             (draft.inherit ? inheritedDetails + ' ' : '') + line(global(),'全局默认') + (draft.model ? '。上次专属配置已保留。' : '')
           if (draft.inherit && inherited.rule?.enabled) details.textContent = inheritedDetails + (draft.model ? '。上次专属配置已保留。' : '')
           const blocked = (draft.enabled && ownBlocked) || (!childFields.hidden && draft.childProvider && childBlocked)
