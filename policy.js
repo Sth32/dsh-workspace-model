@@ -12,7 +12,7 @@ export function sameModel(a, b) {
  * Extend native creation only after authorization/creation have succeeded.
  * Never change the caller's contract or replace the global default writer.
  */
-export function withWorkspaceDefault(create, {rules, inheritEnabled = () => false, workspaces = () => [], getAgent, globalModel, resolve, warn, isBlank, hasSelection}) {
+export function withWorkspaceDefault(create, {rules, legacySharing = () => false, workspaces = () => [], getAgent, globalModel, resolve, warn, isBlank, hasSelection}) {
   const managed = new WeakMap()
   return async function (request, ...args) {
     // Snapshot when the request is accepted; a later save affects the next request.
@@ -20,8 +20,9 @@ export function withWorkspaceDefault(create, {rules, inheritEnabled = () => fals
     let rule
     if (requested != null) {
       try {
-        const enabled = inheritEnabled()
-        rule = effectiveRule(requested, enabled ? workspaces() : [], rules(), enabled).rule
+        const choices = rules(), legacy = legacySharing()
+        const sharing = legacy || choices.some(choice => choice.shareWithChildren)
+        rule = effectiveRule(requested, sharing ? workspaces() : [], choices, legacy).rule
       } catch (error) {
         warn('Workspace default lookup failed: ' + String(error))
       }

@@ -30,3 +30,22 @@ test('handles registered Windows drive/UNC roots and POSIX backslashes',()=>{
   assert.deepEqual(effectiveRule('b',[source,ws('b',b)],[rule],true),expected?{rule,source}:{})
  }
 })
+
+test('sharing is independent per branch and a nearer unshared rule blocks a grandparent',()=>{
+ const extra=ws('extra','/different'), sub=ws('sub','/different/sub')
+ const list=[root,child,leaf,extra,sub]
+ const r={...custom('root'),shareWithChildren:true}, x={...custom('extra'),shareWithChildren:false}
+ const c={...custom('child'),shareWithChildren:false}
+ assert.deepEqual(effectiveRule('child',list,[r,x]),{rule:r,source:root})
+ assert.deepEqual(effectiveRule('sub',list,[r,x]),{})
+ assert.deepEqual(effectiveRule('leaf',list,[r,c,x]),{})
+ assert.deepEqual(effectiveRule('leaf',list,[r,{...c,shareWithChildren:true},x]),{rule:{...c,shareWithChildren:true},source:child})
+ assert.deepEqual(effectiveRule('leaf',list,[r,{...c,inherit:true},x]),{rule:r,source:root})
+})
+
+test('upgrades preserve legacy rules, but explicit scoped off wins',()=>{
+ const list=[root,child], legacy=custom('root')
+ assert.deepEqual(effectiveRule('child',list,[legacy],true),{rule:legacy,source:root})
+ assert.deepEqual(effectiveRule('child',list,[{...legacy,shareWithChildren:false}],true),{})
+ assert.deepEqual(effectiveRule('child',list,[legacy],false),{})
+})

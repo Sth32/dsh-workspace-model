@@ -7,6 +7,7 @@ const rule = z.object({
   workspaceId: z.string().required(),
   enabled: z.boolean().default(false),
   inherit: z.boolean().default(false),
+  shareWithChildren: z.boolean(),
   provider: z.string().default(''),
   model: z.string().default(''),
   reasoningEffort: z.string().default(''),
@@ -21,7 +22,7 @@ export function apply(ctx, config) {
   const original = controller.create
   const wrapped = withWorkspaceDefault(original, {
     rules: () => config.rules.get(),
-    inheritEnabled: () => config.inheritEnabled.get(),
+    legacySharing: () => config.inheritEnabled.get(),
     workspaces: () => ctx.workspaceRegistry.list(),
     getAgent: id => ctx.agents.get(id),
     isBlank(agent) {

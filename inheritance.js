@@ -1,10 +1,9 @@
 // Shared by the server and the generated block in client.js. Use the
 // host-spelled registered paths, matching the native disk tree semantics.
-export function effectiveRule(id, items, rules, inheritEnabled) {
+export function effectiveRule(id, items, rules, legacySharing = false) {
   const byId = new Map(rules.map(rule => [rule.workspaceId, rule]))
   const local = byId.get(id)
   if (local && !local.inherit) return { rule: local }
-  if (!inheritEnabled) return {}
   const pathKey = path => {
     if (typeof path !== 'string' || !path) return undefined
     const windows = /^[A-Za-z]:[/\\]/.test(path) || path.startsWith('\\\\')
@@ -24,6 +23,7 @@ export function effectiveRule(id, items, rules, inheritEnabled) {
     rule = candidate
     length = root.length
   }
-  // An explicit “follow global” on an ancestor also ends the search.
-  return source ? { rule, source } : {}
+  // An explicit nearer rule stops the search, even if it is not shared.
+  // Legacy global opt-in is only a default for rules saved before v0.1.3.
+  return source && (rule.shareWithChildren ?? legacySharing) ? { rule, source } : {}
 }

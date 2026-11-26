@@ -17,7 +17,7 @@ function fixture(){
   const create = withWorkspaceDefault(async request => {
     if(request.fail) throw new Error('native rejection')
     return {sessionId:request.sessionId && map.has(request.sessionId) ? request.sessionId : make(String(++id)),agentPreset:'standard'}
-  },{rules:()=>state.rules,inheritEnabled:()=>state.inherit,workspaces:()=>state.workspaces,getAgent:id=>map.get(id),globalModel:()=>global,isBlank:a=>a.session.lastTurn===0,hasSelection:async a=>a.model.current()!==global,resolve:async()=>state.valid,warn:x=>warnings.push(x)})
+  },{rules:()=>state.rules,legacySharing:()=>state.inherit,workspaces:()=>state.workspaces,getAgent:id=>map.get(id),globalModel:()=>global,isBlank:a=>a.session.lastTurn===0,hasSelection:async a=>a.model.current()!==global,resolve:async()=>state.valid,warn:x=>warnings.push(x)})
   return {state,create,warnings,map}
 }
 test('two different workspace defaults, reasoning and native return preserved',async()=>{
