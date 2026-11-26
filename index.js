@@ -2,21 +2,27 @@ import z from '@deepseek-ai/schemastery'
 import { withWorkspaceDefault } from './policy.js'
 
 export const name = 'workspace-model-defaults'
-export const inject = ['settings', 'sessionController', 'agents', 'agentDefaultModel', 'llm', 'sessionQuery']
+export const inject = ['settings', 'sessionController', 'agents', 'agentDefaultModel', 'llm', 'sessionQuery', 'workspaceRegistry']
 const rule = z.object({
   workspaceId: z.string().required(),
   enabled: z.boolean().default(false),
+  inherit: z.boolean().default(false),
   provider: z.string().default(''),
   model: z.string().default(''),
   reasoningEffort: z.string().default(''),
 })
-export const Config = z.object({ rules: z.array(rule).default([]).volatile() })
+export const Config = z.object({
+  rules: z.array(rule).default([]).volatile(),
+  inheritEnabled: z.boolean().default(false).volatile(),
+})
 export function apply(ctx, config) {
   ctx.effect(() => ctx.settings.configure({ auto: false }, ctx.fiber))
   const controller = ctx.sessionController
   const original = controller.create
   const wrapped = withWorkspaceDefault(original, {
     rules: () => config.rules.get(),
+    inheritEnabled: () => config.inheritEnabled.get(),
+    workspaces: () => ctx.workspaceRegistry.list(),
     getAgent: id => ctx.agents.get(id),
     isBlank(agent) {
       const boundary = ctx.agents.turnBoundaryOf(agent.session)

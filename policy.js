@@ -1,3 +1,4 @@
+import { effectiveRule } from './inheritance.js'
 export const entry = 'workspace-model-defaults'
 export function modelOf(rule) {
   if (!rule?.provider || !rule?.model) return undefined
@@ -11,26 +12,35 @@ export function sameModel(a, b) {
  * Extend native creation only after authorization/creation have succeeded.
  * Never change the caller's contract or replace the global default writer.
  */
-export function withWorkspaceDefault(create, {rules, getAgent, globalModel, resolve, warn, isBlank, hasSelection}) {
+export function withWorkspaceDefault(create, {rules, inheritEnabled = () => false, workspaces = () => [], getAgent, globalModel, resolve, warn, isBlank, hasSelection}) {
   const managed = new WeakMap()
   return async function (request, ...args) {
     // Snapshot when the request is accepted; a later save affects the next request.
     const requested = request?.workspaceId
-    const rule = requested == null ? undefined : rules().find(item => item.workspaceId === requested)
+    let rule
+    if (requested != null) {
+      try {
+        const enabled = inheritEnabled()
+        rule = effectiveRule(requested, enabled ? workspaces() : [], rules(), enabled).rule
+      } catch (error) {
+        warn('Workspace default lookup failed: ' + String(error))
+      }
+    }
     const result = await create.call(this, request, ...args)
-    if (!rule) return result
+    if (requested == null) return result
 
     try {
       const agent = getAgent(result.sessionId)
       if (!agent) return result
-      const previous = managed.get(agent)
+      const prior = managed.get(agent)
+      const previous = prior?.workspaceId === requested ? prior.selection : undefined
+      if (!rule?.enabled && !previous) return result
       const requestedBlank = request.sessionId === result.sessionId
       const current = agent.model.current()
       // Native only reuses blank sessions. Still preserve an explicit model edit on a blank
       // and never touch a retained agent whose choice we did not set.
-      if (requestedBlank && (previous ? !sameModel(previous, current) : !rule.enabled || await hasSelection(agent))) return result
-      if (!rule.enabled && !previous) return result
-      const selection = rule.enabled ? modelOf(rule) : globalModel()
+      if (requestedBlank && (previous ? !sameModel(previous, current) : await hasSelection(agent))) return result
+      const selection = rule?.enabled ? modelOf(rule) : globalModel()
       if (!selection || !await resolve(selection)) {
         warn('Workspace default is unavailable; retaining the native model selection')
         return result
@@ -40,7 +50,7 @@ export function withWorkspaceDefault(create, {rules, getAgent, globalModel, reso
       if (now !== current && (now || current) && !sameModel(now, current)) return result
       if (!isBlank(agent)) return result
       agent.model.select(selection)
-      managed.set(agent, selection)
+      managed.set(agent, { workspaceId: requested, selection })
     } catch (error) {
       warn('Workspace default was not applied: ' + String(error))
     }

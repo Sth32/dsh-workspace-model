@@ -3,6 +3,37 @@ window.__ModuleLoader__.load({
   factory: () => {
     const exports = {}
     const entry = 'workspace-model-defaults'
+    // BEGIN SHARED INHERITANCE
+    // Shared by the server and the generated block in client.js. Use the
+    // host-spelled registered paths, matching the native disk tree semantics.
+    function effectiveRule(id, items, rules, inheritEnabled) {
+      const byId = new Map(rules.map(rule => [rule.workspaceId, rule]))
+      const local = byId.get(id)
+      if (local && !local.inherit) return { rule: local }
+      if (!inheritEnabled) return {}
+      const pathKey = path => {
+        if (typeof path !== 'string' || !path) return undefined
+        const windows = /^[A-Za-z]:[/\\]/.test(path) || path.startsWith('\\\\')
+        if (!windows && !path.startsWith('/')) return undefined
+        return (windows ? path.replaceAll('\\', '/') : path).replace(/\/+$/, '')
+      }
+      const idOf = workspace => workspace.workspaceId ?? workspace.id
+      const child = pathKey(items.find(workspace => idOf(workspace) === id)?.path)
+      if (child == null) return {}
+      let source, rule, length = -1
+      for (const workspace of items) {
+        const root = pathKey(workspace.path)
+        const candidate = byId.get(idOf(workspace))
+        if (!candidate || candidate.inherit || root == null || root.length <= length
+          || child === root || !child.startsWith(root + '/')) continue
+        source = workspace
+        rule = candidate
+        length = root.length
+      }
+      // An explicit “follow global” on an ancestor also ends the search.
+      return source ? { rule, source } : {}
+    }
+    // END SHARED INHERITANCE
     exports.inject = ['configForms', 'remote', 'remote.session', 'workspaces', 'contextMenus']
     exports.apply = ctx => {
       const form = ctx.get('configForms').get(entry)
@@ -11,6 +42,7 @@ window.__ModuleLoader__.load({
       const controls = new Map()
       let catalog, catalogError, disposed = false, refreshing = false, dialog, tip
       const rules = () => form.getSnapshot().value?.rules ?? []
+      const inheritEnabled = () => form.getSnapshot().value?.inheritEnabled === true
       const find = id => rules().find(x => x.workspaceId === id)
       const name = ws => ws.title || ws.name || ws.path?.split(/[/\\]/).filter(Boolean).at(-1) || ws.workspaceId
       const element = (tag, text, attrs = {}) => Object.assign(document.createElement(tag), {textContent: text}, attrs)
@@ -24,6 +56,14 @@ window.__ModuleLoader__.load({
         return [model?.name || rule.model, effort?.name || rule.reasoningEffort || ''].filter(Boolean).join(' ')
       }
       const line = (rule, type) => type + '：' + modelText(rule)
+      const effective = (ws, choices = rules()) =>
+        effectiveRule(ws.workspaceId, workspaces.getSnapshot().items ?? [], choices, inheritEnabled())
+      const inheritedLine = ({rule,source}) => source && rule?.enabled && rule.provider && rule.model
+        ? '继承自「' + name(source) + '」：' + modelText(rule) : ''
+      const cardLine = ws => {
+        const {rule,source} = effective(ws)
+        return source ? inheritedLine({rule,source}) : rule?.enabled && rule.provider && rule.model ? line(rule,'固定模型') : ''
+      }
       // One low-detail outline at 14 px, matching the native new-session glyph.
       function cloudIcon(pinned) {
         const ns = 'http://www.w3.org/2000/svg'
@@ -48,13 +88,12 @@ window.__ModuleLoader__.load({
       function showTip(button, ws) {
         if (dialog?.open) return
         removeTip()
-        const rule = find(ws.workspaceId)
         const r = button.getBoundingClientRect()
         // Anchor past the row so the tooltip never hides its other actions.
         const rowRight = button.closest('[role="treeitem"]')?.getBoundingClientRect().right ?? r.right
         tip = element('div', '', {id:'dshwm-tip', className:'dshwm-tip'})
         tip.setAttribute('role', 'tooltip')
-        tip.textContent = rule?.enabled ? line(rule, '固定模型') : line(global(), '跟随全局')
+        tip.textContent = cardLine(ws) || line(global(), '跟随全局')
         document.body.append(tip)
         const w = tip.getBoundingClientRect().width
         tip.style.left = Math.max(6, Math.min(rowRight + 8, innerWidth - w - 8)) + 'px'
@@ -81,7 +120,7 @@ window.__ModuleLoader__.load({
         if (disposed || dialog?.open) return
         removeTip()
         const stored = find(ws.workspaceId)
-        const draft = {workspaceId:ws.workspaceId, enabled:stored?.enabled ?? false,
+        const draft = {workspaceId:ws.workspaceId, enabled:stored?.enabled ?? false, inherit: !stored || stored.inherit === true,
           provider:stored?.provider ?? '', model:stored?.model ?? '', reasoningEffort:stored?.reasoningEffort ?? ''}
         const d = dialog = element('dialog', '', {className:'dshwm-dialog'})
         d.setAttribute('aria-labelledby','dshwm-title')
@@ -89,8 +128,11 @@ window.__ModuleLoader__.load({
           element('p', name(ws), {className:'dshwm-workspace'}),element('small',ws.path || ''),
           element('p','只影响在此工作区新建的会话，不改已有对话和全局默认。',{className:'dshwm-desc'}))
         const mode = element('select','')
-        mode.append(opt('global','跟随全局'),opt('custom','使用专属模型'))
-        mode.value = draft.enabled ? 'custom' : 'global'
+        mode.append(opt('inherit','继承父工作区'),opt('global','跟随全局'),opt('custom','使用专属模型'))
+        mode.value = draft.inherit ? 'inherit' : draft.enabled ? 'custom' : 'global'
+        const inheritance = element('input','',{type:'checkbox',className:'dshwm-inherit-toggle'})
+        const switchRow = element('label','',{className:'dshwm-inherit-setting'})
+        switchRow.append(inheritance, element('span','在所有工作区启用父级继承（即时保存）'))
         const provider = element('select',''), model = element('select',''), effort = element('select','')
         const fields = element('div','')
         fields.append(label('提供方',provider),label('模型',model),label('思考等级',effort))
@@ -101,13 +143,14 @@ window.__ModuleLoader__.load({
         const save = element('button','保存',{type:'button',className:'dshwm-primary'})
         cancel.onclick = () => d.close()
         actions.append(cancel,save)
-        d.append(label('默认规则',mode),details,fields,notice,actions)
+        const preferenceNotice = element('p','',{className:'dshwm-notice',ariaLive:'polite'})
+        d.append(switchRow,preferenceNotice,label('默认规则',mode),details,fields,notice,actions)
         function fill(input, values, selected, caption) {
           input.replaceChildren(opt('',caption), ...values.map(x=>opt(x.id,x.name || x.id)))
           if (selected && !values.some(x=>x.id===selected)) input.append(opt(selected, selected+'（不可用）'))
           input.value = selected || ''
         }
-        let saving = false
+        let saving = false, pendingInheritance
         function draw() {
           const groups = catalog?.groups ?? []
           const g = groups.find(g=>g.id===draft.provider), m = g?.models.find(m=>m.id===draft.model)
@@ -118,14 +161,31 @@ window.__ModuleLoader__.load({
           provider.disabled = !groups.length
           model.disabled = !g
           effort.disabled = !m?.reasoning?.efforts?.length
+          const inherited = draft.inherit ? effective(ws, [...rules().filter(x=>x.workspaceId!==ws.workspaceId),draft]) : {}
+          const inheritedDetails = inheritedLine(inherited) ||
+            (inherited.source ? '继承自「' + name(inherited.source) + '」：跟随全局。' :
+              !inheritEnabled() ? '父级继承已关闭。' : '没有可继承的父级配置。')
           details.textContent = draft.enabled ? '手动选择的模型仍可覆盖默认值。' :
-            line(global(),'全局默认') + (draft.model ? '。上次专属配置已保留。' : '')
+            (draft.inherit ? inheritedDetails + ' ' : '') + line(global(),'全局默认') + (draft.model ? '。上次专属配置已保留。' : '')
+          if (draft.inherit && inherited.rule?.enabled) details.textContent = inheritedDetails + (draft.model ? '。上次专属配置已保留。' : '')
           const blocked = draft.enabled && (!m || (draft.reasoningEffort && !m.reasoning?.efforts?.some(e=>e.id===draft.reasoningEffort)))
           const writable = form.getSnapshot().writable
-          save.disabled = saving || !writable || !!blocked
+          const switching = pendingInheritance !== undefined
+          inheritance.checked = pendingInheritance ?? inheritEnabled()
+          inheritance.disabled = !writable || switching || saving
+          save.disabled = saving || switching || !writable || !!blocked
           notice.textContent = !writable ? '当前配置不可写，请确认你已连接本机 DSH。' : (draft.enabled ? catalogError || '' : '')
         }
-        mode.onchange = ()=>{draft.enabled=mode.value==='custom';draw()}
+        mode.onchange = ()=>{draft.enabled=mode.value==='custom';draft.inherit=mode.value==='inherit';draw()}
+        inheritance.onchange = async ()=>{
+          const value = inheritance.checked
+          pendingInheritance=value; preferenceNotice.textContent=''; draw()
+          try {
+            if (!await form.set('inheritEnabled',value)) throw new Error()
+          } catch {
+            preferenceNotice.textContent='继承开关未保存，请重试。'
+          } finally {pendingInheritance=undefined;draw()}
+        }
         provider.onchange = ()=>{draft.provider=provider.value;draft.model='';draft.reasoningEffort='';draw()}
         model.onchange = ()=>{draft.model=model.value;draft.reasoningEffort='';draw()}
         effort.onchange = ()=>{draft.reasoningEffort=effort.value;draw()}
@@ -165,6 +225,8 @@ window.__ModuleLoader__.load({
          .dshwm-dialog small,.dshwm-desc{color:var(--dsw-alias-label-secondary,GrayText)}
          .dshwm-dialog small{overflow-wrap:anywhere}
          .dshwm-field{display:grid;grid-template-columns:78px 1fr;align-items:center;gap:12px;margin:8px 0}
+         .dshwm-inherit-setting{display:flex;align-items:center;gap:8px;margin:12px 0;font-size:12px;line-height:18px}
+         .dshwm-inherit-toggle{margin:0;accent-color:var(--dsw-alias-state-business-primary,Highlight)}
          .dshwm-field select{width:100%;min-width:0;height:32px;box-sizing:border-box;background:var(--dsw-alias-bg-module-platform,Field);color:var(--dsw-alias-label-primary,FieldText);border:1px solid var(--dsw-alias-border-l2,GrayText);border-radius:var(--dsw-radius-sm,6px);padding:4px 8px;font:inherit}
          .dshwm-field select:focus-visible,.dshwm-actions button:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary,Highlight);outline-offset:1px}
          .dshwm-desc{font-size:12px;line-height:18px;margin:8px 0}
@@ -191,14 +253,13 @@ window.__ModuleLoader__.load({
           const ws = anchor ? anchors.get(anchor) : candidates.length === 1 ? candidates[0][1] : undefined
           const content = card.querySelector(':scope > [class*="_hoverContent"]')
           const label = content?.querySelector(':scope > .dshwm-native-model')
-          const rule = ws && !tip ? find(ws.workspaceId) : undefined
-          if (!rule?.enabled || !rule.provider || !rule.model ||
+          const text = ws && !tip ? cardLine(ws) : ''
+          if (!text ||
             !content?.querySelector(':scope > [class*="_hoverPath"]') ||
             !content.querySelector(':scope > [class*="_hoverTime"]')) {
             label?.remove()
             continue
           }
-          const text = line(rule, '固定模型')
           if (!label) content.append(element('div', text, {className:'dshwm-native-model'}))
           else if (label.textContent !== text) label.textContent = text
         }
@@ -211,12 +272,11 @@ window.__ModuleLoader__.load({
           const path = content.querySelector(':scope > .bw-hover-path')?.textContent
           const ws = anchor ? anchors.get(anchor) : path ? paths.get(path) : undefined
           const label = content.querySelector(':scope > .dshwm-native-model')
-          const rule = ws && !tip ? find(ws.workspaceId) : undefined
-          if (!content.querySelector(':scope > .bw-hover-title') || !rule?.enabled || !rule.provider || !rule.model) {
+          const text = ws && !tip ? cardLine(ws) : ''
+          if (!content.querySelector(':scope > .bw-hover-title') || !text) {
             label?.remove()
             continue
           }
-          const text = line(rule, '固定模型')
           if (!label) content.append(element('div', text, {className:'dshwm-native-model'}))
           else if (label.textContent !== text) label.textContent = text
         }
@@ -255,7 +315,8 @@ window.__ModuleLoader__.load({
             item={button,wsId:ws.workspaceId};controls.set(row,item)
           }
           item.button.setAttribute('aria-label','设置 '+name(ws)+' 的默认模型')
-          const enabled = !!find(ws.workspaceId)?.enabled
+          const local = find(ws.workspaceId)
+          const enabled = !!local?.enabled && !local?.inherit
           if (item.button.dataset.enabled !== String(enabled)) {
             item.button.dataset.enabled = String(enabled)
             item.button.replaceChildren(cloudIcon(enabled))
